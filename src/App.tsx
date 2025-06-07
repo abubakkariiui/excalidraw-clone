@@ -2,6 +2,10 @@ import { MouseEvent, useEffect, useLayoutEffect, useState } from "react";
 import rough from "roughjs";
 import getStroke from "perfect-freehand";
 import { useHistory } from "./useHistory";
+import { Toolbar } from "./components/Toolbar";
+import { Canvas } from "./components/Canvas";
+import { ActionButtons } from "./components/ActionButtons";
+import { ShortcutsPanel } from "./components/ShortcutsPanel";
 
 type SelectedElementType = ElementType & {
   xOffsets?: number[];
@@ -27,13 +31,23 @@ export type ElementType = {
   offsetY?: number;
   position?: string | null;
   points?: { x: number; y: number }[];
+  text?: string;
+  strokeColor?: string;
+  backgroundColor?: string;
+  strokeWidth?: number;
+  fontSize?: number;
+  fontFamily?: string;
 };
 
 enum Tools {
-  Pencil = "pencil",
+  Selection = "selection",
   Line = "line",
   Rectangle = "rectangle",
-  Selection = "selection",
+  Pencil = "pencil",
+  Text = "text",
+  Circle = "circle",
+  Diamond = "diamond",
+  Arrow = "arrow",
 }
 
 export default function App() {
@@ -41,7 +55,41 @@ export default function App() {
   const [action, setAction] = useState("none");
   const [tool, setTool] = useState<Tools>(Tools.Line);
   const [selectedElement, setSelectedElement] = useState<ElementType | null>();
+  const [strokeColor, setStrokeColor] = useState("#000000");
+  const [backgroundColor, setBackgroundColor] = useState("#ffffff");
+  const [strokeWidth, setStrokeWidth] = useState(2);
+  const [fontSize, setFontSize] = useState(20);
+  const [fontFamily, setFontFamily] = useState("Arial");
+  const [zoom, setZoom] = useState(100);
+  const [showShortcuts, setShowShortcuts] = useState(false);
   const generator = rough.generator();
+
+  const exportToJSON = () => {
+    const jsonString = JSON.stringify(elements);
+    const blob = new Blob([jsonString], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "drawing.json";
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const importFromJSON = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const elements = JSON.parse(e.target?.result as string);
+          setElements(elements);
+        } catch (error) {
+          console.error("Error parsing JSON:", error);
+        }
+      };
+      reader.readAsText(file);
+    }
+  };
 
   const cursorForPosition = (position: string) => {
     switch (position) {
@@ -115,15 +163,113 @@ export default function App() {
   ): ElementType => {
     switch (type) {
       case Tools.Line:
-      case Tools.Rectangle: {
-        const roughElement =
-          type === Tools.Line
-            ? generator.line(x1, y1, x2, y2)
-            : generator.rectangle(x1, y1, x2 - x1, y2 - y1);
-        return { id, x1, y1, x2, y2, type, roughElement };
+      case Tools.Rectangle:
+      case Tools.Circle:
+      case Tools.Diamond:
+      case Tools.Arrow: {
+        let roughElement;
+        switch (type) {
+          case Tools.Line:
+            roughElement = generator.line(x1, y1, x2, y2, {
+              stroke: strokeColor,
+              strokeWidth,
+            });
+            break;
+          case Tools.Rectangle:
+            roughElement = generator.rectangle(x1, y1, x2 - x1, y2 - y1, {
+              stroke: strokeColor,
+              strokeWidth,
+              fill: backgroundColor,
+            });
+            break;
+          case Tools.Circle:
+            const radius = Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
+            roughElement = generator.circle(x1, y1, radius * 2, {
+              stroke: strokeColor,
+              strokeWidth,
+              fill: backgroundColor,
+            });
+            break;
+          case Tools.Diamond:
+            const centerX = (x1 + x2) / 2;
+            const centerY = (y1 + y2) / 2;
+            const width = Math.abs(x2 - x1);
+            const height = Math.abs(y2 - y1);
+            roughElement = generator.polygon(
+              [
+                [centerX, y1],
+                [x2, centerY],
+                [centerX, y2],
+                [x1, centerY],
+              ],
+              {
+                stroke: strokeColor,
+                strokeWidth,
+                fill: backgroundColor,
+              }
+            );
+            break;
+          case Tools.Arrow:
+            const arrowLength = 20;
+            const angle = Math.atan2(y2 - y1, x2 - x1);
+            const arrowX1 = x2 - arrowLength * Math.cos(angle - Math.PI / 6);
+            const arrowY1 = y2 - arrowLength * Math.sin(angle - Math.PI / 6);
+            const arrowX2 = x2 - arrowLength * Math.cos(angle + Math.PI / 6);
+            const arrowY2 = y2 - arrowLength * Math.sin(angle + Math.PI / 6);
+            roughElement = generator.line(x1, y1, x2, y2, {
+              stroke: strokeColor,
+              strokeWidth,
+            });
+            // Add arrow head
+            const arrowHead1 = generator.line(x2, y2, arrowX1, arrowY1, {
+              stroke: strokeColor,
+              strokeWidth,
+            });
+            const arrowHead2 = generator.line(x2, y2, arrowX2, arrowY2, {
+              stroke: strokeColor,
+              strokeWidth,
+            });
+            return {
+              id,
+              x1,
+              y1,
+              x2,
+              y2,
+              type,
+              roughElement: [roughElement, arrowHead1, arrowHead2],
+              strokeColor,
+              strokeWidth,
+            };
+        }
+        return {
+          id,
+          x1,
+          y1,
+          x2,
+          y2,
+          type,
+          roughElement,
+          strokeColor,
+          backgroundColor,
+          strokeWidth,
+        };
+      }
+      case Tools.Text: {
+        return {
+          id,
+          x1,
+          y1,
+          x2,
+          y2,
+          type,
+          roughElement: null,
+          text: "",
+          strokeColor,
+          fontSize,
+          fontFamily,
+        };
       }
       case Tools.Pencil: {
-        const defaultRoughElement = null;
         return {
           id,
           x1: 0,
@@ -132,7 +278,9 @@ export default function App() {
           y2: 0,
           type,
           points: [{ x: x1, y: y1 }],
-          roughElement: defaultRoughElement,
+          roughElement: null,
+          strokeColor,
+          strokeWidth,
         };
       }
       default:
@@ -266,39 +414,49 @@ export default function App() {
   };
 
   const drawElement = (
-    // TODO: add type
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     roughCanvas: any,
     context: CanvasRenderingContext2D,
     element: ElementType
   ) => {
-    switch (element.type) {
-      case "line":
-      case "rectangle":
+    if (
+      ["line", "rectangle", "circle", "diamond", "arrow"].includes(element.type)
+    ) {
+      if (Array.isArray(element.roughElement)) {
+        element.roughElement.forEach((el) => {
+          if (el) roughCanvas.draw(el);
+        });
+      } else if (element.roughElement) {
         roughCanvas.draw(element.roughElement);
-        break;
-      case "pencil": {
-        if (!element.points) {
-          throw new Error("Pencil element points are undefined");
-        }
-        const strokePoints = getStroke(element.points);
-        const formattedPoints: [number, number][] = strokePoints.map(
-          (point) => {
-            if (point.length !== 2) {
-              throw new Error(
-                `Expected point to have exactly 2 elements, got ${point.length}`
-              );
-            }
-            return [point[0], point[1]];
-          }
-        );
-        const stroke = getSvgPathFromStroke(formattedPoints);
-        context.fill(new Path2D(stroke));
-        break;
       }
-      default:
-        throw new Error(`Type not recognised: ${element.type}`);
+      return;
     }
+    if (element.type === "text") {
+      if (element.text) {
+        context.font = `${element.fontSize}px ${element.fontFamily}`;
+        context.fillStyle = element.strokeColor || "#000000";
+        context.fillText(element.text, element.x1, element.y1);
+      }
+      return;
+    }
+    if (element.type === "pencil") {
+      if (!element.points) {
+        throw new Error("Pencil element points are undefined");
+      }
+      const strokePoints = getStroke(element.points);
+      const formattedPoints: [number, number][] = strokePoints.map((point) => {
+        if (point.length !== 2) {
+          throw new Error(
+            `Expected point to have exactly 2 elements, got ${point.length}`
+          );
+        }
+        return [point[0], point[1]];
+      });
+      const stroke = getSvgPathFromStroke(formattedPoints);
+      context.fillStyle = element.strokeColor || "#000000";
+      context.fill(new Path2D(stroke));
+      return;
+    }
+    // Fallback: do nothing
   };
 
   useLayoutEffect(() => {
@@ -343,13 +501,27 @@ export default function App() {
     const elementsCopy = [...elements];
     switch (type) {
       case Tools.Line:
-      case Tools.Rectangle: {
+      case Tools.Rectangle:
+      case Tools.Circle:
+      case Tools.Diamond:
+      case Tools.Arrow: {
         elementsCopy[id] = createElement(id, x1, y1, x2, y2, type);
         break;
       }
       case Tools.Pencil: {
         const existingPoints = elementsCopy[id].points || [];
         elementsCopy[id].points = [...existingPoints, { x: x2, y: y2 }];
+        break;
+      }
+      case Tools.Text: {
+        // For text, update position if needed
+        elementsCopy[id] = {
+          ...elementsCopy[id],
+          x1,
+          y1,
+          x2,
+          y2,
+        };
         break;
       }
       default:
@@ -363,20 +535,24 @@ export default function App() {
 
   const handleMouseDown = (event: MouseEvent<HTMLCanvasElement>) => {
     const { clientX, clientY } = event;
+    const canvas = event.target as HTMLCanvasElement;
+    const rect = canvas.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
 
     if (tool === Tools.Selection) {
-      const element = getElementAtPosition(clientX, clientY, elements);
+      const element = getElementAtPosition(x, y, elements);
 
       if (element) {
         let selectedElement: SelectedElementType = { ...element };
 
         if (element.type === "pencil" && element.points) {
-          const xOffsets = element.points.map((point) => clientX - point.x);
-          const yOffsets = element.points.map((point) => clientY - point.y);
+          const xOffsets = element.points.map((point) => x - point.x);
+          const yOffsets = element.points.map((point) => y - point.y);
           selectedElement = { ...selectedElement, xOffsets, yOffsets };
         } else {
-          const offsetX = clientX - selectedElement.x1;
-          const offsetY = clientY - selectedElement.y1;
+          const offsetX = x - selectedElement.x1;
+          const offsetY = y - selectedElement.y1;
           selectedElement = { ...selectedElement, offsetX, offsetY };
         }
 
@@ -389,16 +565,23 @@ export default function App() {
           setAction("resizing");
         }
       }
+    } else if (tool === Tools.Text) {
+      const id = elements.length;
+      const newElement = createElement(id, x, y, x, y, tool);
+      setElements((prevState) => [...prevState, newElement]);
+      setSelectedElement(newElement);
+      const text = prompt("Enter text:");
+      if (text) {
+        const elementsCopy = [...elements];
+        elementsCopy[id] = {
+          ...elementsCopy[id],
+          text,
+        };
+        setElements(elementsCopy, true);
+      }
     } else {
       const id = elements.length;
-      const newElement = createElement(
-        id,
-        clientX,
-        clientY,
-        clientX,
-        clientY,
-        tool
-      );
+      const newElement = createElement(id, x, y, x, y, tool);
       setElements((prevState) => [...prevState, newElement]);
       setSelectedElement(newElement);
       setAction("drawing");
@@ -407,9 +590,13 @@ export default function App() {
 
   const handleMouseMove = (event: MouseEvent<HTMLCanvasElement>) => {
     const { clientX, clientY } = event;
+    const canvas = event.target as HTMLCanvasElement;
+    const rect = canvas.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
 
     if (tool === Tools.Selection) {
-      const element = getElementAtPosition(clientX, clientY, elements);
+      const element = getElementAtPosition(x, y, elements);
 
       if (element && element.position) {
         (event.target as HTMLElement).style.cursor = cursorForPosition(
@@ -423,7 +610,7 @@ export default function App() {
     if (action === "drawing") {
       const index = elements.length - 1;
       const { x1, y1 } = elements[index];
-      updateElement(index, x1, y1, clientX, clientY, tool);
+      updateElement(index, x1, y1, x, y, tool);
     } else if (action === "moving" && selectedElement) {
       if (
         selectedElement.type === "pencil" &&
@@ -433,8 +620,8 @@ export default function App() {
       ) {
         const extendedElement = selectedElement as ExtendedElementType;
         const newPoints = extendedElement.points!.map((_, index) => ({
-          x: clientX - extendedElement.xOffsets![index],
-          y: clientY - extendedElement.yOffsets![index],
+          x: x - extendedElement.xOffsets![index],
+          y: y - extendedElement.yOffsets![index],
         }));
         const elementsCopy = [...elements];
         elementsCopy[extendedElement.id] = {
@@ -447,9 +634,8 @@ export default function App() {
           selectedElement as ExtendedElementType;
         const safeOffsetX = offsetX ?? 0;
         const safeOffsetY = offsetY ?? 0;
-        const newX1 = clientX - safeOffsetX;
-        const newY1 = clientY - safeOffsetY;
-        // 🫐 Calculate the new position for x2 and y2 based on the original size
+        const newX1 = x - safeOffsetX;
+        const newY1 = y - safeOffsetY;
         const newX2 = newX1 + (x2 - x1);
         const newY2 = newY1 + (y2 - y1);
 
@@ -465,8 +651,8 @@ export default function App() {
 
       if (typeof position === "string") {
         const { x1, y1, x2, y2 } = resizedCoordinates(
-          clientX,
-          clientY,
+          x,
+          y,
           position,
           coordinates
         );
@@ -491,62 +677,72 @@ export default function App() {
     setAction("none");
   };
 
+  const handleKeyDown = (event: KeyboardEvent) => {
+    if (event.ctrlKey || event.metaKey) {
+      switch (event.key.toLowerCase()) {
+        case "z":
+          if (event.shiftKey) {
+            redo();
+          } else {
+            undo();
+          }
+          break;
+        case "y":
+          redo();
+          break;
+        case "s":
+          event.preventDefault();
+          exportToJSON();
+          break;
+      }
+    } else if (event.key === "Delete" && selectedElement) {
+      const elementsCopy = elements.filter((el) => el.id !== selectedElement.id);
+      setElements(elementsCopy, true);
+      setSelectedElement(null);
+    }
+  };
+
+  useEffect(() => {
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [undo, redo, selectedElement]);
+
   return (
     <div>
-      <div style={{ position: "fixed" }}>
-        <button onClick={() => setElements([])}>Clear</button>
-
-        <input
-          type="radio"
-          name="selection"
-          id="selection"
-          checked={tool === Tools.Selection}
-          onChange={() => setTool(Tools.Selection)}
-        />
-        <label htmlFor="selection">selection</label>
-        <input
-          type="radio"
-          name="line"
-          id="line"
-          checked={tool === Tools.Line}
-          onChange={() => setTool(Tools.Line)}
-        />
-        <label htmlFor="line">line</label>
-
-        <input
-          type="radio"
-          name="rectangle"
-          id="rectangle"
-          checked={tool === Tools.Rectangle}
-          onChange={() => setTool(Tools.Rectangle)}
-        />
-
-        <label htmlFor="rectangle">rectangle</label>
-
-        <input
-          type="radio"
-          name="pencil"
-          id="pencil"
-          checked={tool === Tools.Pencil}
-          onChange={() => setTool(Tools.Pencil)}
-        />
-
-        <label htmlFor="pencil">pencil</label>
-      </div>
-      <div style={{ position: "fixed", zIndex: 2, bottom: 0, padding: 10 }}>
-        <button onClick={undo}>Undo</button>
-        <button onClick={redo}>Redo</button>
-      </div>
-      <canvas
-        id="canvas"
+      <Toolbar
+        tool={tool}
+        setTool={(t) => setTool(t as Tools)}
+        strokeColor={strokeColor}
+        setStrokeColor={setStrokeColor}
+        backgroundColor={backgroundColor}
+        setBackgroundColor={setBackgroundColor}
+        strokeWidth={strokeWidth}
+        setStrokeWidth={setStrokeWidth}
+        fontSize={fontSize}
+        setFontSize={setFontSize}
+        fontFamily={fontFamily}
+        setFontFamily={setFontFamily}
+        onClear={() => setElements([])}
+        onExport={exportToJSON}
+        onImport={importFromJSON}
+        onShowShortcuts={() => setShowShortcuts(true)}
+        zoom={zoom}
+        setZoom={setZoom}
+      />
+      {showShortcuts && (
+        <ShortcutsPanel onClose={() => setShowShortcuts(false)} />
+      )}
+      <ActionButtons onUndo={undo} onRedo={redo} />
+      <Canvas
         width={window.innerWidth}
         height={window.innerHeight}
         onMouseDown={handleMouseDown}
         onMouseUp={handleMouseUp}
         onMouseMove={handleMouseMove}
-      >
-        Canvas
-      </canvas>
+        zoom={zoom}
+      />
     </div>
   );
 }
